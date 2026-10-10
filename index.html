@@ -172,6 +172,9 @@ button,input,textarea,select{font:inherit;color:inherit}
 .mapwrap{position:relative;flex:1;min-height:0;background:var(--mylar)}
 #map{position:absolute;inset:0}
 .leaflet-container{background:#DCE3E0;font-family:var(--cond)}
+/* Recoloured OSM tiles stand in for the pale and dark styles CARTO used to provide. */
+.tiles-pale{filter:grayscale(1) contrast(.82) brightness(1.1)}
+.tiles-dark{filter:grayscale(1) invert(1) contrast(.85) brightness(.9)}
 .pin{
   border-radius:50%; border:2px solid #fff;
   box-shadow:0 0 0 1px #0000004d, 0 1px 3px #00000033;
@@ -1957,90 +1960,88 @@ const map = L.map("map", {
 /* ---------- base maps ----------
    Two separate problems are being solved here.
 
-   1. LANGUAGE. CARTO and standard OpenStreetMap both take labels from the OSM
-      `name` tag, which in Korea is Hangul, and neither offers a language switch.
-      Esri's world services and Wikimedia's osm-intl style label in Latin script.
+   1. LANGUAGE. OpenStreetMap-based maps take labels from the OSM `name` tag,
+      which in Korea is Hangul, and none of the keyless ones offers a language
+      switch. Esri's world services and Wikimedia's osm-intl style label in Latin
+      script, but neither is usable here (see 2, and Wikimedia now refuses
+      requests from outside its own sites).
 
    2. COVERAGE. Esri's Light Gray Canvas only has real data to about zoom 13 over
       Korea; past that it serves a tile that literally reads "Map data not
       available". That is a successfully delivered image, not an HTTP error, so
       no amount of error handling can detect it \u2014 the only fix is not to use it
-      as the main map. It is kept here, capped at its true native zoom, because
-      it is genuinely the prettiest option when zoomed out.
+      as a map at all. CARTO now fails the same way, with a tile that reads
+      "API KEY REQUIRED".
 
-   Every option below is keyless. If one misbehaves, switch \u2014 the last two are
-   the most reliable things on the list. */
+   Every option below is keyless. If one misbehaves, switch. */
 
 const ATTR = {
   esri: 'Tiles &copy; <a href="https://www.esri.com" target="_blank" rel="noopener">Esri</a>' +
         ' &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors',
-  carto: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' +
-         ' &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>',
   osm: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
   wm: '<a href="https://foundation.wikimedia.org/wiki/Maps_Terms_of_Use" target="_blank" rel="noopener">Wikimedia</a>' +
       ' &copy; OpenStreetMap contributors'
 };
 
-/* Ordered most useful first. Every option is keyless, and every one has been
-   kept because it actually loads: the four Esri/Wikimedia "English" options that
-   used to sit at the top of this list were removed after they failed to serve
-   tiles reliably over Seoul. Labels here are therefore in Hangul, which is what
-   OpenStreetMap's `name` tag holds in Korea. That is why every place name in
-   this file is romanised instead \u2014 the pins, the search and the popups read in
-   Latin script whichever base map is showing. */
+/* Ordered most useful first. Every option is keyless and has been checked to serve
+   real tiles over Seoul. CARTO's basemaps were removed in October 2026: they now
+   answer every request with a 200 tile that reads "API KEY REQUIRED", which, like
+   Esri's "no data" tile, cannot be caught as an error. Esri's street, topo and grey
+   canvas services also return "Map data not yet available" over Seoul at street
+   zoom, so the only Esri layer kept is the imagery. The pale and dark options are
+   standard OSM tiles recoloured with a CSS filter (see .tiles-pale / .tiles-dark).
+   Labels are in Hangul, which is what OpenStreetMap's `name` tag holds in Korea.
+   That is why every place name in this file is romanised instead \u2014 the pins, the
+   search and the popups read in Latin script whichever base map is showing. */
 const BASEMAPS = {
-  "carto-plain": {
-    label: "Blank \u00b7 no labels",
-    note: "The default. CARTO with every label stripped out, so the coloured pins and the routes are the only things on the map. Switch to Voyager below when you need a street name.",
-    layers: [["https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
-      { maxZoom: 20, maxNativeZoom: 20, subdomains: "abcd", attribution: ATTR.carto }]]
-  },
-  "carto-voyager": {
-    label: "Street map \u00b7 Voyager",
-    note: "CARTO Voyager. The one to switch to when you need street names: clear road hierarchy, green parks, detail all the way to zoom 20. Labels in Hangul.",
-    layers: [["https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-      { maxZoom: 20, maxNativeZoom: 20, subdomains: "abcd", attribution: ATTR.carto }]]
-  },
-  "carto-ko": {
-    label: "Pale grey \u00b7 Positron",
-    note: "CARTO Positron. Quiet and pale, so the coloured pins carry the map. Best for screenshots with pins on.",
-    layers: [["https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-      { maxZoom: 20, maxNativeZoom: 20, subdomains: "abcd", attribution: ATTR.carto }]]
+  "osm-pale": {
+    label: "Pale grey \u00b7 OpenStreetMap",
+    note: "The default. Standard OpenStreetMap washed out to grey, so the coloured pins and the routes carry the map while street names stay readable.",
+    layers: [["https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      { maxZoom: 20, maxNativeZoom: 19, className: "tiles-pale", attribution: ATTR.osm }]]
   },
   "osm-ko": {
-    label: "Standard OpenStreetMap",
-    note: "Standard OpenStreetMap. The densest detail of the lot \u2014 building footprints, alley names, shop points \u2014 and the single most reliable option here.",
+    label: "Street map \u00b7 OpenStreetMap",
+    note: "Standard OpenStreetMap in full colour. The densest detail of the lot \u2014 building footprints, alley names, shop points.",
     layers: [["https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-      { maxZoom: 19, maxNativeZoom: 19, attribution: ATTR.osm }]]
+      { maxZoom: 20, maxNativeZoom: 19, attribution: ATTR.osm }]]
   },
-  "carto-dark": {
-    label: "Dark \u00b7 Dark Matter",
-    note: "CARTO Dark Matter. Useful when you are reading the pin pattern rather than the streets.",
-    layers: [["https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-      { maxZoom: 20, maxNativeZoom: 20, subdomains: "abcd", attribution: ATTR.carto }]]
+  "osm-hot": {
+    label: "Soft colour \u00b7 Humanitarian",
+    note: "OpenStreetMap's Humanitarian style. Softer colours and less clutter than the standard map, with buildings still drawn.",
+    layers: [["https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+      { maxZoom: 20, maxNativeZoom: 19, subdomains: "abc", attribution: ATTR.osm +
+        ', tiles <a href="https://www.hotosm.org/" target="_blank" rel="noopener">HOT</a> / OSM France' }]]
+  },
+  "otm": {
+    label: "Terrain \u00b7 OpenTopoMap",
+    note: "OpenTopoMap. Contours and hill shading, which is the clearest way to see Bugaksan and Inwangsan behind the palaces. Detail stops at zoom 17.",
+    layers: [["https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+      { maxZoom: 20, maxNativeZoom: 17, subdomains: "abc", attribution: ATTR.osm +
+        ', SRTM &mdash; style &copy; <a href="https://opentopomap.org" target="_blank" rel="noopener">OpenTopoMap</a>' }]]
   },
   "esri-sat": {
     label: "Satellite \u00b7 no labels",
-    note: "Esri world imagery. No labels at all, and the clearest way to read a landscape project from above \u2014 the basins at Seonyudo, the tank cuts at Mapo. If it fails to load, switch back; it is the one provider here outside CARTO and OSM.",
+    note: "Esri world imagery. No labels at all, and the clearest way to read a landscape project from above \u2014 the basins at Seonyudo, the tank cuts at Mapo.",
     layers: [["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      { maxZoom: 19, maxNativeZoom: 19, attribution: ATTR.esri }]]
+      { maxZoom: 20, maxNativeZoom: 19, attribution: ATTR.esri }]]
   },
-  "carto-dark-nolabels": {
-    label: "Blank \u00b7 dark",
-    note: "The same, inverted. Pale pins read hardest against this one.",
-    layers: [["https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png",
-      { maxZoom: 20, maxNativeZoom: 20, subdomains: "abcd", attribution: ATTR.carto }]]
+  "osm-dark": {
+    label: "Dark \u00b7 OpenStreetMap",
+    note: "Standard OpenStreetMap inverted. Useful when you are reading the pin pattern rather than the streets.",
+    layers: [["https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      { maxZoom: 20, maxNativeZoom: 19, className: "tiles-dark", attribution: ATTR.osm }]]
   }
 };
 
 /* If a provider is unreachable or blocked, walk down this list. Genuine HTTP
    failures are catchable; a provider that returns a "no data" image is not. */
-const FALLBACK = ["carto-plain", "carto-voyager", "osm-ko", "carto-ko"];
-const BASE_KEY = "seoul-field-plan-basemap-v2";
+const FALLBACK = ["osm-pale", "osm-hot", "osm-ko", "esri-sat"];
+const BASE_KEY = "seoul-field-plan-basemap-v3";
 let baseLayers = [], baseKey = null, tileErrs = 0, autoTried = [];
 
 function setBasemap(key, wasAuto) {
-  if (!BASEMAPS[key]) key = "carto-plain";
+  if (!BASEMAPS[key]) key = "osm-pale";
   baseLayers.forEach(l => map.removeLayer(l));
   tileErrs = 0;
   baseKey = key;
@@ -2071,7 +2072,7 @@ function autoFallback() {
   if (next) setBasemap(next, true);
 }
 
-setBasemap(store.get(BASE_KEY) || "carto-plain");
+setBasemap(store.get(BASE_KEY) || "osm-pale");
 L.control.scale({ imperial: true, metric: true, position: "bottomright" }).addTo(map);
 
 el("basesel").innerHTML = Object.keys(BASEMAPS)
