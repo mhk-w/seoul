@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@400;500;600&family=Newsreader:ital,wght@0,300;0,400;0,500;1,300;1,400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css">
 <style>
 /* ============================================================
    SEOUL FIELD PLAN — stylesheet
@@ -172,9 +173,6 @@ button,input,textarea,select{font:inherit;color:inherit}
 .mapwrap{position:relative;flex:1;min-height:0;background:var(--mylar)}
 #map{position:absolute;inset:0}
 .leaflet-container{background:#DCE3E0;font-family:var(--cond)}
-/* Recoloured OSM tiles stand in for the pale and dark styles CARTO used to provide. */
-.tiles-pale{filter:grayscale(1) contrast(.82) brightness(1.1)}
-.tiles-dark{filter:grayscale(1) invert(1) contrast(.85) brightness(.9)}
 .pin{
   border-radius:50%; border:2px solid #fff;
   box-shadow:0 0 0 1px #0000004d, 0 1px 3px #00000033;
@@ -598,6 +596,8 @@ button,input,textarea,select{font:inherit;color:inherit}
 <input type="file" id="filein" accept=".json,application/json" hidden>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"></script>
 <script>
 /* ---- PHOTOS ---- */
 const PHOTOS = {
@@ -1958,110 +1958,152 @@ const map = L.map("map", {
   scrollWheelZoom: true, worldCopyJump: false
 });
 /* ---------- base maps ----------
-   Two separate problems are being solved here.
+   Labels are the hard part. Every raster map built from OpenStreetMap takes its
+   labels from the OSM `name` tag, which in Korea is Hangul, and none of the
+   keyless ones offers a language switch. Esri's street and grey canvas services
+   label in Latin script but serve "Map data not yet available" over Seoul at
+   street zoom, and CARTO now answers every request with a tile reading "API KEY
+   REQUIRED". Both are delivered as ordinary images, so no error handler can
+   catch them.
 
-   1. LANGUAGE. OpenStreetMap-based maps take labels from the OSM `name` tag,
-      which in Korea is Hangul, and none of the keyless ones offers a language
-      switch. Esri's world services and Wikimedia's osm-intl style label in Latin
-      script, but neither is usable here (see 2, and Wikimedia now refuses
-      requests from outside its own sites).
-
-   2. COVERAGE. Esri's Light Gray Canvas only has real data to about zoom 13 over
-      Korea; past that it serves a tile that literally reads "Map data not
-      available". That is a successfully delivered image, not an HTTP error, so
-      no amount of error handling can detect it \u2014 the only fix is not to use it
-      as a map at all. CARTO now fails the same way, with a tile that reads
-      "API KEY REQUIRED".
-
-   Every option below is keyless. If one misbehaves, switch. */
+   The English maps are therefore vector: OpenFreeMap's keyless styles, drawn by
+   MapLibre inside Leaflet. Their tiles carry every OSM name variant, so each
+   label is rewritten to read name:en, then the official romanisation, then any
+   Latin-script name, and is left off entirely when only Hangul exists. That last
+   rule drops some small shops and side streets; it is the price of a map with no
+   Korean on it. The two Hangul raster maps stay at the bottom as a fallback. */
 
 const ATTR = {
   esri: 'Tiles &copy; <a href="https://www.esri.com" target="_blank" rel="noopener">Esri</a>' +
         ' &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors',
   osm: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
-  wm: '<a href="https://foundation.wikimedia.org/wiki/Maps_Terms_of_Use" target="_blank" rel="noopener">Wikimedia</a>' +
-      ' &copy; OpenStreetMap contributors'
+  ofm: '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>' +
+       ' &copy; <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a>' +
+       ' &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors'
 };
+const OFM = "https://tiles.openfreemap.org/styles/";
 
-/* Ordered most useful first. Every option is keyless and has been checked to serve
-   real tiles over Seoul. CARTO's basemaps were removed in October 2026: they now
-   answer every request with a 200 tile that reads "API KEY REQUIRED", which, like
-   Esri's "no data" tile, cannot be caught as an error. Esri's street, topo and grey
-   canvas services also return "Map data not yet available" over Seoul at street
-   zoom, so the only Esri layer kept is the imagery. The pale and dark options are
-   standard OSM tiles recoloured with a CSS filter (see .tiles-pale / .tiles-dark).
-   Labels are in Hangul, which is what OpenStreetMap's `name` tag holds in Korea.
-   That is why every place name in this file is romanised instead \u2014 the pins, the
-   search and the popups read in Latin script whichever base map is showing. */
+/* A base map is either `vector` (an OpenFreeMap style plus a label mode) or
+   `layers` (raster tile layers, as before). */
 const BASEMAPS = {
-  "osm-pale": {
-    label: "Pale grey \u00b7 OpenStreetMap",
-    note: "The default. Standard OpenStreetMap washed out to grey, so the coloured pins and the routes carry the map while street names stay readable.",
-    layers: [["https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-      { maxZoom: 20, maxNativeZoom: 19, className: "tiles-pale", attribution: ATTR.osm }]]
+  "en-pale": {
+    label: "Pale grey · English",
+    note: "The default. OpenFreeMap Positron with English labels: quiet enough that the coloured pins and routes carry the map, with street names still there when you zoom in.",
+    vector: { style: "positron", labels: "en" }
+  },
+  "en-street": {
+    label: "Street map · English",
+    note: "OpenFreeMap Liberty with English labels. Full colour, parks, buildings and shop points — the one to use when finding a door.",
+    vector: { style: "liberty", labels: "en" }
+  },
+  "blank": {
+    label: "Blank · no labels",
+    note: "Positron with every label removed, so the pins and the routes are the only words on the map.",
+    vector: { style: "positron", labels: "none" }
+  },
+  "en-dark": {
+    label: "Dark · English",
+    note: "OpenFreeMap Dark with English labels. Useful when you are reading the pin pattern rather than the streets.",
+    vector: { style: "dark", labels: "en" }
+  },
+  "blank-dark": {
+    label: "Blank · dark",
+    note: "The same, inverted, with no labels. Pale pins read hardest against this one.",
+    vector: { style: "dark", labels: "none" }
+  },
+  "esri-sat": {
+    label: "Satellite · no labels",
+    note: "Esri world imagery. No labels at all, and the clearest way to read a landscape project from above — the basins at Seonyudo, the tank cuts at Mapo.",
+    layers: [["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      { maxZoom: 20, maxNativeZoom: 19, attribution: ATTR.esri }]]
   },
   "osm-ko": {
-    label: "Street map \u00b7 OpenStreetMap",
-    note: "Standard OpenStreetMap in full colour. The densest detail of the lot \u2014 building footprints, alley names, shop points.",
+    label: "Street map · Hangul",
+    note: "Standard OpenStreetMap. The densest detail of the lot, every shop and alley named, but in Korean. Raster, so it loads where the vector maps cannot.",
     layers: [["https://tile.openstreetmap.org/{z}/{x}/{y}.png",
       { maxZoom: 20, maxNativeZoom: 19, attribution: ATTR.osm }]]
   },
-  "osm-hot": {
-    label: "Soft colour \u00b7 Humanitarian",
-    note: "OpenStreetMap's Humanitarian style. Softer colours and less clutter than the standard map, with buildings still drawn.",
-    layers: [["https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
-      { maxZoom: 20, maxNativeZoom: 19, subdomains: "abc", attribution: ATTR.osm +
-        ', tiles <a href="https://www.hotosm.org/" target="_blank" rel="noopener">HOT</a> / OSM France' }]]
-  },
   "otm": {
-    label: "Terrain \u00b7 OpenTopoMap",
+    label: "Terrain · Hangul",
     note: "OpenTopoMap. Contours and hill shading, which is the clearest way to see Bugaksan and Inwangsan behind the palaces. Detail stops at zoom 17.",
     layers: [["https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
       { maxZoom: 20, maxNativeZoom: 17, subdomains: "abc", attribution: ATTR.osm +
         ', SRTM &mdash; style &copy; <a href="https://opentopomap.org" target="_blank" rel="noopener">OpenTopoMap</a>' }]]
-  },
-  "esri-sat": {
-    label: "Satellite \u00b7 no labels",
-    note: "Esri world imagery. No labels at all, and the clearest way to read a landscape project from above \u2014 the basins at Seonyudo, the tank cuts at Mapo.",
-    layers: [["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      { maxZoom: 20, maxNativeZoom: 19, attribution: ATTR.esri }]]
-  },
-  "osm-dark": {
-    label: "Dark \u00b7 OpenStreetMap",
-    note: "Standard OpenStreetMap inverted. Useful when you are reading the pin pattern rather than the streets.",
-    layers: [["https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-      { maxZoom: 20, maxNativeZoom: 19, className: "tiles-dark", attribution: ATTR.osm }]]
   }
 };
 
+/* English first, then the Revised Romanization OSM keeps in name:ko-Latn, then any
+   Latin-script name. An empty string draws nothing, which is how Hangul-only
+   features drop out. */
+const EN_NAME = ["coalesce", ["get", "name:en"], ["get", "name:ko-Latn"], ["get", "name:latin"], ""];
+
+function relabel(style, mode) {
+  style.layers = style.layers.filter(l => {
+    if (l.type !== "symbol" || !l.layout || !l.layout["text-field"]) return true;
+    if (mode === "none") return false;
+    /* Road shields read `ref`, which is already digits; only name labels change. */
+    if (JSON.stringify(l.layout["text-field"]).indexOf('"name') !== -1) l.layout["text-field"] = EN_NAME;
+    return true;
+  });
+  return style;
+}
+
+const styleCache = {};
+function loadStyle(name) {
+  if (!styleCache[name]) styleCache[name] = fetch(OFM + name).then(r => {
+    if (!r.ok) throw new Error("style " + r.status);
+    return r.json();
+  });
+  /* Each base map gets its own copy, since relabel() edits in place. */
+  return styleCache[name].then(s => JSON.parse(JSON.stringify(s)));
+}
+
 /* If a provider is unreachable or blocked, walk down this list. Genuine HTTP
    failures are catchable; a provider that returns a "no data" image is not. */
-const FALLBACK = ["osm-pale", "osm-hot", "osm-ko", "esri-sat"];
-const BASE_KEY = "seoul-field-plan-basemap-v3";
+const FALLBACK = ["en-pale", "en-street", "osm-ko", "esri-sat"];
+const BASE_KEY = "seoul-field-plan-basemap-v4";
 let baseLayers = [], baseKey = null, tileErrs = 0, autoTried = [];
 
+function baseFailed() {
+  /* A handful of missing tiles is normal at the edges; a wall of them is not. */
+  if (++tileErrs === 10) autoFallback();
+}
+
 function setBasemap(key, wasAuto) {
-  if (!BASEMAPS[key]) key = "osm-pale";
+  if (!BASEMAPS[key]) key = "en-pale";
   baseLayers.forEach(l => map.removeLayer(l));
+  baseLayers = [];
   tileErrs = 0;
   baseKey = key;
-  baseLayers = BASEMAPS[key].layers.map(spec => L.tileLayer(spec[0], spec[1]).addTo(map));
-  if (baseLayers[0]) {
-    baseLayers[0].bringToBack();
-    baseLayers[0].on("tileerror", () => {
-      /* A handful of missing tiles is normal at the edges; a wall of them is not. */
-      if (++tileErrs === 10) autoFallback();
-    });
+  const b = BASEMAPS[key];
+  if (b.vector) {
+    if (!window.L.maplibreGL) { tileErrs = 9; baseFailed(); return; }
+    loadStyle(b.vector.style).then(style => {
+      if (baseKey !== key) return;   /* switched again while the style loaded */
+      const gl = L.maplibreGL({
+        style: relabel(style, b.vector.labels), attribution: ATTR.ofm,
+        /* Without this the canvas comes out blank when the page is printed. */
+        canvasContextAttributes: { preserveDrawingBuffer: true }, preserveDrawingBuffer: true
+      }).addTo(map);
+      baseLayers = [gl];
+      gl.getMaplibreMap().on("error", baseFailed);
+    }).catch(() => { if (baseKey === key) { tileErrs = 9; baseFailed(); } });
+  } else {
+    baseLayers = b.layers.map(spec => L.tileLayer(spec[0], spec[1]).addTo(map));
+    if (baseLayers[0]) {
+      baseLayers[0].bringToBack();
+      baseLayers[0].on("tileerror", baseFailed);
+    }
   }
   store.set(BASE_KEY, key);
   const sel = el("basesel");
   if (sel) sel.value = key;
-  /* The per-option description is gone \u2014 the labels say enough and the box has to
+  /* The per-option description is gone — the labels say enough and the box has to
      stay small enough to sit beside the legend. The only thing still worth saying
      out loud is that the page switched maps on you without being asked. */
   const nb = el("basenote");
   if (nb) {
-    nb.textContent = wasAuto ? "Switched automatically \u2014 the previous map would not load." : "";
+    nb.textContent = wasAuto ? "Switched automatically — the previous map would not load." : "";
     nb.hidden = !wasAuto;
   }
 }
@@ -2072,7 +2114,7 @@ function autoFallback() {
   if (next) setBasemap(next, true);
 }
 
-setBasemap(store.get(BASE_KEY) || "osm-pale");
+setBasemap(store.get(BASE_KEY) || "en-pale");
 L.control.scale({ imperial: true, metric: true, position: "bottomright" }).addTo(map);
 
 el("basesel").innerHTML = Object.keys(BASEMAPS)
